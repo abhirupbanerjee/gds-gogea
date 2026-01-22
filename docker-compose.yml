@@ -1,0 +1,149 @@
+version: '3.8'
+
+services:
+  minio:
+    image: minio/minio
+    container_name: minio
+    ports:
+      - "9090:9000"
+      - "9091:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - ./minio-data:/data
+    command: server /data --console-address ":9001"
+    restart: always
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.3
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - xpack.security.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - xpack.security.http.ssl.enabled=false
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: always
+
+  drupal:
+    build:
+      context: ./drupal-docker
+      dockerfile: Dockerfile
+    container_name: drupal
+    ports:
+      - "8001:80"
+    volumes:
+      - ./drupal-docker/drupal_t:/var/www/html
+    depends_on:
+      - db
+    restart: always
+
+  db:
+    image: mariadb:10.5
+    container_name: drupal_db
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: drupal
+      MYSQL_USER: drupal
+      MYSQL_PASSWORD: drupalpass
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./drupal-docker/db.sql:/docker-entrypoint-initdb.d/db.sql
+    restart: always
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend
+    container_name: backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      - elasticsearch
+      - minio
+    restart: always
+    env_file:
+      - ./backend/.env
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    ports:
+      - "19000:19000"
+      - "19001:19001"
+      - "19002:19002"
+      - "19006:19006"
+      - "8081:8081"
+    depends_on:
+      - backend
+    restart: always
+    env_file:
+      - ./frontend/.env
+
+  postgres:
+    image: postgres
+    container_name: postgres
+    environment:
+      POSTGRES_PASSWORD: mysecretpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    restart: always
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - ./servers.json:/pgadmin4/servers.json
+    depends_on:
+      - postgres
+    restart: always
+
+  login:
+    build:
+      context: ./backend/login
+      dockerfile: Dockerfile.login
+    container_name: login
+    ports:
+      - "8002:8002"
+    depends_on:
+      - postgres
+    restart: always
+    env_file:
+      - ./backend/login/.env
+  
+  uploader:
+    build:
+      context: .
+      dockerfile: Dockerfile    # explicitly named
+    container_name: minio_uploader
+    depends_on:
+      - minio
+    volumes:
+      - ./minio-data:/data       # host → /data in container
+    restart: "no"
+volumes:
+  db_data:
+  esdata:
+  pgdata:
